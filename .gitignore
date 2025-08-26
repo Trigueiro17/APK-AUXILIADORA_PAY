@@ -37,3 +37,6 @@ yarn-error.*
 *.tsbuildinfo
 
 /generated/prisma
+
+# APK files
+*.apk
