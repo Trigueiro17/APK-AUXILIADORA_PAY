@@ -241,8 +241,22 @@ const CheckoutScreen: React.FC = () => {
       setPaymentModalVisible(false);
       setPixModalVisible(false);
       
-      // Mostrar modal de recibo
-      setReceiptModalVisible(true);
+      // Imprimir cupom fiscal diretamente
+      try {
+        await printService.printReceipt(receiptData);
+        Alert.alert(
+          'Venda Realizada',
+          `Venda de ${formatCurrency(calculatedTotal)} realizada com sucesso!\nCupom fiscal enviado para impressão.`,
+          [{ text: 'OK' }]
+        );
+      } catch (printError) {
+        console.error('Erro ao imprimir recibo:', printError);
+        Alert.alert(
+          'Venda Realizada',
+          `Venda de ${formatCurrency(calculatedTotal)} realizada com sucesso!\nErro na impressão: ${printError}`,
+          [{ text: 'OK' }]
+        );
+      }
       
       // Reload products
       await loadProducts();
@@ -368,8 +382,22 @@ const CheckoutScreen: React.FC = () => {
     
     clearCart();
     
-    // Mostrar modal de recibo
-    setReceiptModalVisible(true);
+    // Imprimir cupom fiscal diretamente
+    try {
+      await printService.printReceipt(receiptData);
+      Alert.alert(
+        'Venda Realizada',
+        `Venda de ${formatCurrency(calculatedTotal)} realizada com sucesso!\nCupom fiscal enviado para impressão.`,
+        [{ text: 'OK' }]
+      );
+    } catch (printError) {
+      console.error('Erro ao imprimir recibo:', printError);
+      Alert.alert(
+        'Venda Realizada',
+        `Venda de ${formatCurrency(calculatedTotal)} realizada com sucesso!\nErro na impressão: ${printError}`,
+        [{ text: 'OK' }]
+      );
+    }
     
     // Reload products
     await loadProducts();
