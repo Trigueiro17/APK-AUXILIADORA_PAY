@@ -2,6 +2,7 @@ import React, { createContext, useContext, useReducer, useEffect } from 'react';
 import { remoteSettingsService } from '../services/remoteSettingsService';
 import { ApiSettings } from '../services/apiService';
 import { useAppContext } from './AppContext';
+import { PrinterConfig } from '../services/printService';
 
 interface SettingsState {
   darkMode: boolean;
@@ -22,6 +23,7 @@ interface SettingsState {
 interface SettingsContextType {
   settings: SettingsState;
   updateSetting: (key: keyof SettingsState, value: any) => void;
+  updatePrinterConfig: (printerConfig: PrinterConfig) => Promise<void>;
   resetSettings: () => void;
   syncSettings: () => Promise<void>;
   isLoading: boolean;
@@ -47,6 +49,27 @@ const defaultSettings: SettingsState = {
   nfcEnabled: true,
   hideHistoryEnabled: false,
   bluetoothEnabled: false,
+};
+
+// Utility functions for printer config conversion
+const convertPrinterConfigToApi = (printerConfig: PrinterConfig) => {
+  return {
+    type: printerConfig.type,
+    name: printerConfig.deviceName || printerConfig.type,
+    address: printerConfig.macAddress,
+    isConnected: printerConfig.isConnected,
+  };
+};
+
+const convertApiToPrinterConfig = (apiConfig: any): PrinterConfig | undefined => {
+  if (!apiConfig) return undefined;
+  
+  return {
+    type: apiConfig.type as any,
+    deviceName: apiConfig.name,
+    macAddress: apiConfig.address,
+    isConnected: apiConfig.isConnected,
+  };
 };
 
 interface SettingsReducerState extends SettingsState {
@@ -126,6 +149,31 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       const userId = appState.user?.id;
       const apiSettings = await remoteSettingsService.getSettings(userId);
       const mappedSettings = mapApiSettingsToState(apiSettings);
+      
+      // Se não há configuração de impressora, tentar definir uma ESC/POS como padrão
+      if (!mappedSettings.printerConfig) {
+        try {
+          const { printService } = require('../services/printService');
+          const availablePrinters = await printService.getAvailablePrinters();
+          const escPosPrinter = availablePrinters.find((printer: any) => 
+            printer.type === 'mini_thermal_58mm' || printer.type === 'mpt_ii_pos_mini_58mm'
+          );
+          
+          if (escPosPrinter) {
+            const defaultPrinterConfig = convertPrinterConfigToApi(escPosPrinter);
+            mappedSettings.printerConfig = defaultPrinterConfig;
+            
+            // Salvar a configuração padrão
+            const updateData = { printerConfig: defaultPrinterConfig };
+            await remoteSettingsService.updateSettings(userId, updateData);
+            console.log('Impressora ESC/POS definida como padrão:', escPosPrinter.deviceName);
+          }
+        } catch (printerError) {
+          console.warn('Erro ao definir impressora padrão:', printerError);
+          // Continua sem impressora padrão se houver erro
+        }
+      }
+      
       dispatch({ type: 'LOAD_SETTINGS', settings: mappedSettings });
     } catch (error) {
       console.error('Erro ao carregar configurações:', error);
@@ -147,6 +195,27 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       dispatch({ type: 'SET_ERROR', error: 'Erro ao salvar configuração' });
       // Reload settings to revert local changes
       await loadSettings();
+    }
+  };
+
+  const updatePrinterConfig = async (printerConfig: PrinterConfig) => {
+    try {
+      // Convert PrinterConfig to API format
+      const apiPrinterConfig = convertPrinterConfigToApi(printerConfig);
+      
+      // Update local state immediately for better UX
+      dispatch({ type: 'SET_SETTING', key: 'printerConfig', value: apiPrinterConfig });
+      
+      // Update remote settings
+      const userId = appState.user?.id;
+      const updateData = { printerConfig: apiPrinterConfig };
+      await remoteSettingsService.updateSettings(userId, updateData);
+    } catch (error) {
+      console.error('Erro ao atualizar configuração da impressora:', error);
+      dispatch({ type: 'SET_ERROR', error: 'Erro ao salvar configuração da impressora' });
+      // Reload settings to revert local changes
+      await loadSettings();
+      throw error;
     }
   };
 
@@ -214,6 +283,7 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       printerConfig: state.printerConfig,
     },
     updateSetting,
+    updatePrinterConfig,
     resetSettings,
     syncSettings,
     isLoading: state.isLoading,

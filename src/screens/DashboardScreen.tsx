@@ -238,11 +238,11 @@ const DashboardScreen: React.FC = () => {
     }
   }, [state, dispatch]);
 
-  // Carregar dados iniciais com delay para evitar flickering
+  // Carregar dados iniciais imediatamente para maior responsividade
   useEffect(() => {
     const timer = setTimeout(() => {
       loadDashboardData();
-    }, 300);
+    }, 100); // Reduzido de 300ms para 100ms
     
     return () => clearTimeout(timer);
   }, []);
@@ -254,18 +254,18 @@ const DashboardScreen: React.FC = () => {
       setLoading(false);
     };
 
-    // Aguardar um momento antes de configurar listeners
+    // Configurar listeners mais rapidamente para melhor responsividade
     const timer = setTimeout(() => {
       try {
         // Adicionar listener para atualizações
         dashboardService.addListener(handleDataUpdate);
         
-        // Iniciar atualizações automáticas (a cada 60 segundos para reduzir carga)
-        dashboardService.startRealTimeUpdates(60000);
+        // Iniciar atualizações automáticas mais frequentes (a cada 15 segundos para maior responsividade)
+        dashboardService.startRealTimeUpdates(15000);
       } catch (error) {
         console.error('Erro ao configurar atualizações em tempo real:', error);
       }
-    }, 1000);
+    }, 200); // Reduzido de 1000ms para 200ms
 
     // Cleanup ao desmontar o componente
     return () => {

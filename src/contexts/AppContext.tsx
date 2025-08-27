@@ -2,6 +2,7 @@ import React, { createContext, useContext, useReducer, ReactNode, useEffect } fr
 import { User, Product, CashRegister, CashSession, ConsolidatedData, Sale, PaymentMethod, CashSessionStatus } from '../types';
 import { apiService, ApiUser, ApiProduct, ApiCashRegister, ApiCashSession, ApiConsolidatedData, ApiSale } from '../services/apiService';
 import { ConsolidationService, ConsolidationSummary } from '../services/consolidationService';
+import { dashboardService } from '../services/dashboardService';
 
 // Mapping functions to convert API types to app types
 const mapApiUserToUser = (apiUser: ApiUser): User => ({
@@ -556,9 +557,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return state.currentCashRegister;
     }
 
-    try {
-      dispatch({ type: 'SET_LOADING', payload: true });
-      dispatch({ type: 'SET_CASH_REGISTER_OPERATION', payload: true });
+    // Usar o dashboardService para gerenciar delays e sincronização
+    return await dashboardService.handleCashOperation('opening', async () => {
+      try {
+        dispatch({ type: 'SET_LOADING', payload: true });
+        dispatch({ type: 'SET_CASH_REGISTER_OPERATION', payload: true });
       
       // Verificar se já existe um caixa aberto para este usuário no servidor
       try {
@@ -573,13 +576,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
         console.log('Erro ao verificar caixas existentes, prosseguindo com criação:', checkError);
       }
       
-      // Se não há caixa aberto, criar um novo
-      const apiCashRegister = await apiService.createCashRegister({ userId: data.userId, initialAmount: data.openingAmount });
-      const cashRegister = mapApiCashRegisterToCashRegister(apiCashRegister);
-      dispatch({ type: 'SET_CASH_REGISTER', payload: cashRegister });
-      console.log('Novo caixa criado com sucesso');
-      return cashRegister;
-    } catch (error: any) {
+        // Se não há caixa aberto, criar um novo
+        const apiCashRegister = await apiService.createCashRegister({ userId: data.userId, initialAmount: data.openingAmount });
+        const cashRegister = mapApiCashRegisterToCashRegister(apiCashRegister);
+        dispatch({ type: 'SET_CASH_REGISTER', payload: cashRegister });
+        console.log('Novo caixa criado com sucesso');
+        return cashRegister;
+      } catch (error: any) {
       console.error('Error opening cash register:', error);
       
       // Tratamento específico para erro 409 (caixa já aberto)
@@ -623,33 +626,37 @@ export function AppProvider({ children }: { children: ReactNode }) {
         throw new Error(errorMessage);
       }
       
-      dispatch({ type: 'SET_ERROR', payload: 'Erro ao abrir caixa registradora' });
-      throw error;
-    } finally {
-      dispatch({ type: 'SET_LOADING', payload: false });
-      dispatch({ type: 'SET_CASH_REGISTER_OPERATION', payload: false });
-    }
+        dispatch({ type: 'SET_ERROR', payload: 'Erro ao abrir caixa registradora' });
+        throw error;
+      } finally {
+        dispatch({ type: 'SET_LOADING', payload: false });
+        dispatch({ type: 'SET_CASH_REGISTER_OPERATION', payload: false });
+      }
+    });
   };
 
   const closeCashRegister = async (id: string, data: { closingAmount: number }): Promise<CashRegister> => {
-    try {
-      dispatch({ type: 'SET_LOADING', payload: true });
-      const apiCashRegister = await apiService.closeCashRegister(id, data.closingAmount);
-      const cashRegister = mapApiCashRegisterToCashRegister(apiCashRegister);
-      
-      // Após fechar o caixa, definir currentCashRegister como null
-      // para que a interface mostre o status correto (fechado)
-      dispatch({ type: 'SET_CASH_REGISTER', payload: null });
-      console.log('Cash register closed successfully, status updated to closed');
-      
-      return cashRegister;
-    } catch (error) {
-      console.error('Error closing cash register:', error);
-      dispatch({ type: 'SET_ERROR', payload: 'Erro ao fechar caixa registradora' });
-      throw error;
-    } finally {
-      dispatch({ type: 'SET_LOADING', payload: false });
-    }
+    // Usar o dashboardService para gerenciar delays e sincronização
+    return await dashboardService.handleCashOperation('closing', async () => {
+      try {
+        dispatch({ type: 'SET_LOADING', payload: true });
+        const apiCashRegister = await apiService.closeCashRegister(id, data.closingAmount);
+        const cashRegister = mapApiCashRegisterToCashRegister(apiCashRegister);
+        
+        // Após fechar o caixa, definir currentCashRegister como null
+        // para que a interface mostre o status correto (fechado)
+        dispatch({ type: 'SET_CASH_REGISTER', payload: null });
+        console.log('Cash register closed successfully, status updated to closed');
+        
+        return cashRegister;
+      } catch (error) {
+        console.error('Error closing cash register:', error);
+        dispatch({ type: 'SET_ERROR', payload: 'Erro ao fechar caixa registradora' });
+        throw error;
+      } finally {
+        dispatch({ type: 'SET_LOADING', payload: false });
+      }
+    });
   };
 
   const createSale = async (saleData: Partial<Sale>): Promise<Sale> => {
@@ -670,6 +677,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       });
       const sale = mapApiSaleToSale(apiSale);
       dispatch({ type: 'ADD_SALE', payload: sale });
+      
+      // Atualização instantânea do dashboard após venda
+      await dashboardService.onSaleOperation();
+      
       return sale;
     } catch (error) {
       console.error('Error creating sale:', error);
@@ -806,9 +817,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const openCashSession = async (data: { userId: string; openingAmount: number }): Promise<CashSession> => {
-    try {
-      dispatch({ type: 'SET_LOADING', payload: true });
-      dispatch({ type: 'SET_CASH_REGISTER_OPERATION', payload: true });
+    // Usar o dashboardService para gerenciar delays e sincronização
+    return await dashboardService.handleCashOperation('opening', async () => {
+      try {
+        dispatch({ type: 'SET_LOADING', payload: true });
+        dispatch({ type: 'SET_CASH_REGISTER_OPERATION', payload: true });
       
       // Fallback: Use cash register system since backend doesn't have sessions
       // Check if user already has an active cash register
@@ -862,36 +875,40 @@ export function AppProvider({ children }: { children: ReactNode }) {
       dispatch({ type: 'SET_ERROR', payload: null });
       console.log('Cash session opened successfully (using cash register):', session.id);
       
-      return session;
-    } catch (error: any) {
-      console.error('Error opening cash session:', error);
-      dispatch({ type: 'SET_ERROR', payload: 'Erro ao abrir sessão de caixa' });
-      throw error;
-    } finally {
-      dispatch({ type: 'SET_LOADING', payload: false });
-      dispatch({ type: 'SET_CASH_REGISTER_OPERATION', payload: false });
-    }
+        return session;
+      } catch (error: any) {
+        console.error('Error opening cash session:', error);
+        dispatch({ type: 'SET_ERROR', payload: 'Erro ao abrir sessão de caixa' });
+        throw error;
+      } finally {
+        dispatch({ type: 'SET_LOADING', payload: false });
+        dispatch({ type: 'SET_CASH_REGISTER_OPERATION', payload: false });
+      }
+    });
   };
 
   const closeCashSession = async (sessionId: string, data: { closingAmount: number }): Promise<void> => {
-    try {
-      dispatch({ type: 'SET_LOADING', payload: true });
-      
-      // Fallback: Close the cash register that represents this session
-      await apiService.closeCashRegister(sessionId, data.closingAmount);
-      
-      // Clear current session from state
-      dispatch({ type: 'SET_CASH_SESSION', payload: null });
-      dispatch({ type: 'SET_ERROR', payload: null });
-      
-      console.log('Cash session closed successfully (using cash register)');
-    } catch (error: any) {
-      console.error('Error closing cash session:', error);
-      dispatch({ type: 'SET_ERROR', payload: 'Erro ao fechar sessão de caixa' });
-      throw error;
-    } finally {
-      dispatch({ type: 'SET_LOADING', payload: false });
-    }
+    // Usar o dashboardService para gerenciar delays e sincronização
+    return await dashboardService.handleCashOperation('closing', async () => {
+      try {
+        dispatch({ type: 'SET_LOADING', payload: true });
+        
+        // Fallback: Close the cash register that represents this session
+        await apiService.closeCashRegister(sessionId, data.closingAmount);
+        
+        // Clear current session from state
+        dispatch({ type: 'SET_CASH_SESSION', payload: null });
+        dispatch({ type: 'SET_ERROR', payload: null });
+        
+        console.log('Cash session closed successfully (using cash register)');
+      } catch (error: any) {
+        console.error('Error closing cash session:', error);
+        dispatch({ type: 'SET_ERROR', payload: 'Erro ao fechar sessão de caixa' });
+        throw error;
+      } finally {
+        dispatch({ type: 'SET_LOADING', payload: false });
+      }
+    });
   };
 
   const getSalesBySession = async (sessionId: string): Promise<Sale[]> => {

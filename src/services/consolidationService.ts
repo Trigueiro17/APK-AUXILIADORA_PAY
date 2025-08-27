@@ -129,7 +129,7 @@ export class ConsolidationService {
         
         const offlineConsolidation: ConsolidatedData = {
           id: `offline-${sessionId}-${Date.now()}`,
-          sessionId,
+          cashSessionId: sessionId,
           userId: 'offline-user',
           totalSales: 0,
           totalCash: 0,
@@ -138,9 +138,7 @@ export class ConsolidationService {
           salesCount: 0,
           openingAmount: 0,
           closingAmount,
-          netAmount: closingAmount,
-          expectedAmount: closingAmount,
-          difference: 0,
+
           consolidatedAt: new Date(),
           createdAt: new Date(),
           updatedAt: new Date()

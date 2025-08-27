@@ -33,6 +33,7 @@ const SettingsScreen: React.FC = () => {
   const { 
     settings, 
     updateSetting, 
+    updatePrinterConfig,
     syncSettings, 
     isLoading, 
     error, 
@@ -52,6 +53,9 @@ const SettingsScreen: React.FC = () => {
   const [testingPrint, setTestingPrint] = useState(false);
   const [bluetoothModalVisible, setBluetoothModalVisible] = useState(false);
   const [bluetoothEnabled, setBluetoothEnabled] = useState(false);
+  const [testingBluetooth, setTestingBluetooth] = useState(false);
+  const [testingConnection, setTestingConnection] = useState(false);
+  const [refreshingPrinters, setRefreshingPrinters] = useState(false);
 
 
 
@@ -129,19 +133,116 @@ const SettingsScreen: React.FC = () => {
 
   const loadPrinterConfig = async () => {
     try {
-      const config = printService.getPrinterConfig();
-      setCurrentPrinterConfig(config);
-      
+      console.log('🔄 [SettingsScreen] Carregando configuração da impressora...');
       const printers = await printService.getAvailablePrinters();
       setAvailablePrinters(printers);
+      
+      let config = printService.getPrinterConfig();
+      
+      // Verificar se há configuração salva no contexto de configurações
+      if (!config && settings.printerConfig) {
+        // Encontrar a impressora correspondente na lista de disponíveis
+        const savedPrinter = printers.find(p => 
+          p.type === settings.printerConfig?.type || 
+          p.macAddress === settings.printerConfig?.address
+        );
+        
+        if (savedPrinter) {
+          config = {
+            ...savedPrinter,
+            isConnected: settings.printerConfig.isConnected
+          };
+          printService.setPrinterConfig(config);
+        }
+      }
+      
+      // Se não há configuração salva e há impressoras disponíveis, seleciona automaticamente a primeira ESC/POS
+      if (!config && printers.length > 0) {
+        const defaultConfig: PrinterConfig = {
+          ...printers[0],
+          isConnected: true
+        };
+        printService.setPrinterConfig(defaultConfig);
+        config = defaultConfig;
+        
+        // Salvar como padrão no contexto
+        try {
+          await updateSetting('printerConfig', {
+            type: defaultConfig.type,
+            name: defaultConfig.deviceName || 'Impressora ESC/POS',
+            address: defaultConfig.macAddress,
+            isConnected: defaultConfig.isConnected
+          });
+        } catch (error) {
+          console.log('Não foi possível salvar configuração padrão:', error);
+        }
+      }
+      
+      setCurrentPrinterConfig(config);
+      console.log('✅ [SettingsScreen] Configuração da impressora carregada');
     } catch (error) {
-      console.error('Erro ao carregar configuração da impressora:', error);
+      console.error('❌ [SettingsScreen] Erro ao carregar configuração da impressora:', error);
     }
   };
 
-  const openPrinterModal = () => {
+  const openPrinterModal = async () => {
     setSelectedPrinter(currentPrinterConfig?.type || null);
     setPrinterModalVisible(true);
+    
+    // Atualizar lista de impressoras ao abrir o modal
+    await refreshPrinters();
+  };
+  
+  const refreshPrinters = async () => {
+    setRefreshingPrinters(true);
+    try {
+      console.log('🔄 [SettingsScreen] Atualizando lista de impressoras...');
+      
+      // Primeiro, buscar dispositivos Bluetooth clássicos pareados
+      try {
+        await bluetoothService.getClassicBluetoothDevices();
+        console.log('📱 [SettingsScreen] Dispositivos Bluetooth clássicos carregados');
+      } catch (classicError) {
+        console.warn('⚠️ [SettingsScreen] Erro ao carregar dispositivos clássicos:', classicError);
+      }
+      
+      // Depois, tentar iniciar um scan de dispositivos BLE
+      try {
+        await bluetoothService.startScan();
+        console.log('📡 [SettingsScreen] Scan de dispositivos BLE iniciado');
+        
+        // Aguardar um pouco para o scan encontrar dispositivos
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        
+        // Parar o scan
+        await bluetoothService.stopScan();
+        console.log('⏹️ [SettingsScreen] Scan de dispositivos BLE finalizado');
+      } catch (scanError) {
+        console.warn('⚠️ [SettingsScreen] Erro no scan de dispositivos BLE:', scanError);
+      }
+      
+      // Recarregar a lista de impressoras (agora incluindo BLE + clássicos)
+      const printers = await printService.getAvailablePrinters();
+      setAvailablePrinters(printers);
+      
+      console.log(`✅ [SettingsScreen] Lista atualizada: ${printers.length} impressoras encontradas`);
+      
+      if (printers.length === 0) {
+        Alert.alert(
+          'Nenhuma Impressora Encontrada',
+          'Certifique-se de que:\n\n• O Bluetooth está ativado\n• A impressora está ligada\n• A impressora está pareada com este dispositivo\n• A impressora é compatível com ESC/POS',
+          [
+            { text: 'Tentar Novamente', onPress: refreshPrinters },
+            { text: 'OK' }
+          ]
+        );
+      }
+    } catch (error) {
+      console.error('❌ [SettingsScreen] Erro ao atualizar impressoras:', error);
+      Alert.alert('Erro', 'Falha ao buscar impressoras. Verifique se o Bluetooth está ativado.');
+    } finally {
+      setRefreshingPrinters(false);
+    }
   };
 
   const closePrinterModal = () => {
@@ -149,7 +250,7 @@ const SettingsScreen: React.FC = () => {
     setSelectedPrinter(null);
   };
 
-  const savePrinterConfig = () => {
+  const savePrinterConfig = async () => {
     if (!selectedPrinter) {
       Alert.alert('Erro', 'Selecione uma impressora.');
       return;
@@ -162,10 +263,20 @@ const SettingsScreen: React.FC = () => {
         isConnected: true
       };
       
+      // Salvar no serviço de impressão
       printService.setPrinterConfig(newConfig);
       setCurrentPrinterConfig(newConfig);
       
-      Alert.alert('Sucesso', 'Configuração da impressora salva com sucesso!');
+      // Salvar no contexto de configurações usando a nova função
+      try {
+        await updatePrinterConfig(newConfig);
+        
+        Alert.alert('Sucesso', 'Impressora ESC/POS configurada como padrão com sucesso!');
+      } catch (error) {
+        console.error('Erro ao salvar configuração da impressora:', error);
+        Alert.alert('Aviso', 'Impressora configurada localmente, mas não foi possível sincronizar.');
+      }
+      
       closePrinterModal();
     }
   };
@@ -190,14 +301,63 @@ const SettingsScreen: React.FC = () => {
     }
   };
 
+  const testBluetoothConnection = async () => {
+    setTestingBluetooth(true);
+    try {
+      const success = await printService.testBluetoothConnection();
+      if (success) {
+        Alert.alert('Sucesso', 'Conectividade Bluetooth verificada com sucesso! Dispositivos pareados encontrados.');
+      } else {
+        Alert.alert('Aviso', 'Bluetooth não está habilitado ou nenhum dispositivo pareado foi encontrado.');
+      }
+    } catch (error) {
+      console.error('Erro no teste de conectividade:', error);
+      Alert.alert('Erro', 'Falha ao testar conectividade Bluetooth.');
+    } finally {
+      setTestingBluetooth(false);
+    }
+  };
+
+  const testSelectedPrinterConnection = async (printer: PrinterConfig) => {
+    setTestingConnection(true);
+    try {
+      // Configurar temporariamente a impressora para teste
+      const tempConfig = {
+        ...printer,
+        isConnected: false
+      };
+      
+      // Testar conexão específica com esta impressora
+      let success = false;
+      if (printer.bluetoothDevice) {
+        success = await printService.setBluetoothPrinter(printer.bluetoothDevice);
+      }
+      
+      if (success) {
+        Alert.alert(
+          'Conexão Bem-Sucedida', 
+          `Conectado com sucesso à impressora ${printer.deviceName || getPrinterDisplayName(printer.type)}!`
+        );
+      } else {
+        Alert.alert(
+          'Falha na Conexão', 
+          `Não foi possível conectar com a impressora ${printer.deviceName || getPrinterDisplayName(printer.type)}. Verifique se ela está ligada e pareada.`
+        );
+      }
+    } catch (error) {
+      console.error('Erro no teste de conexão da impressora:', error);
+      Alert.alert('Erro', 'Falha ao testar conexão com a impressora selecionada.');
+    } finally {
+      setTestingConnection(false);
+    }
+  };
+
   const getPrinterDisplayName = (type: PrinterType): string => {
     switch (type) {
-      case 'moderninha_smart_2':
-        return 'Moderninha Smart V2';
-      case 'mercado_pago_point_smart':
-        return 'Mercado Pago Point Smart';
       case 'mini_thermal_58mm':
-        return 'Mini Impressora Térmica 58mm';
+        return 'Mini Impressora Térmica ESC/POS 58mm';
+      case 'mpt_ii_pos_mini_58mm':
+        return 'MPT-II POS Mini ESC/POS 58mm';
       default:
         return type;
     }
@@ -320,19 +480,37 @@ const SettingsScreen: React.FC = () => {
           </Card.Content>
         </Card>
 
-        {/* Configuração da Impressora */}
+        {/* Configuração da Impressora Bluetooth ESC/POS */}
         <Card style={styles.card}>
           <Card.Content>
-            <Title style={styles.sectionTitle}>Impressora</Title>
+            <Title style={styles.sectionTitle}>Impressora Bluetooth ESC/POS</Title>
             
             <List.Item
-              title="Configurar Impressora"
+              title="Configurar Impressora Térmica"
               description={currentPrinterConfig ? 
                 `${getPrinterDisplayName(currentPrinterConfig.type)} - ${currentPrinterConfig.isConnected ? 'Conectada' : 'Desconectada'}` : 
                 'Nenhuma impressora configurada'
               }
               left={props => <List.Icon {...props} icon="printer" />}
               onPress={openPrinterModal}
+            />
+            
+            <Divider />
+            
+            <List.Item
+              title="Definir como Padrão"
+              description={currentPrinterConfig ? 
+                'Impressora ESC/POS definida como padrão' : 
+                'Configure uma impressora primeiro'
+              }
+              left={props => <List.Icon {...props} icon="printer-settings" />}
+              right={() => (
+                <Switch
+                  value={!!currentPrinterConfig}
+                  onValueChange={() => {}}
+                  disabled={!currentPrinterConfig}
+                />
+              )}
             />
             
             <Divider />
@@ -345,6 +523,17 @@ const SettingsScreen: React.FC = () => {
               onPress={testPrint}
               disabled={!currentPrinterConfig || testingPrint}
             />
+            
+            <Divider />
+            
+            <List.Item
+               title="Testar Conectividade Bluetooth"
+               description="Verificar conexão Bluetooth com impressoras"
+               left={props => <List.Icon {...props} icon="bluetooth-connect" />}
+               right={() => testingBluetooth ? <ActivityIndicator size="small" /> : null}
+               onPress={testBluetoothConnection}
+               disabled={testingBluetooth}
+             />
           </Card.Content>
         </Card>
 
@@ -377,30 +566,75 @@ const SettingsScreen: React.FC = () => {
           >
             <Card>
               <Card.Content>
-                <Title>Configurar Impressora</Title>
+                <Title>Configurar Impressora Bluetooth ESC/POS</Title>
                 <Paragraph style={styles.modalDescription}>
-                  Selecione a impressora que deseja usar:
+                  Selecione a impressora térmica Bluetooth ESC/POS que deseja usar como padrão:
                 </Paragraph>
                 
-                <RadioButton.Group
-                  onValueChange={value => setSelectedPrinter(value as PrinterType)}
-                  value={selectedPrinter || ''}
+                {/* Botão de Refresh */}
+                <Button
+                  mode="outlined"
+                  onPress={refreshPrinters}
+                  loading={refreshingPrinters}
+                  disabled={refreshingPrinters}
+                  icon="refresh"
+                  style={{ marginBottom: 16 }}
                 >
-                  {availablePrinters.map((printer) => (
-                    <View key={printer.type} style={styles.radioItem}>
-                      <RadioButton.Item
-                        label={getPrinterDisplayName(printer.type)}
-                        value={printer.type}
-                        status={selectedPrinter === printer.type ? 'checked' : 'unchecked'}
-                      />
-                    </View>
-                  ))}
-                </RadioButton.Group>
+                  {refreshingPrinters ? 'Buscando Impressoras...' : 'Atualizar Lista'}
+                </Button>
+                
+                {availablePrinters.length === 0 ? (
+                  <View style={{ padding: 16, alignItems: 'center' }}>
+                    <Text style={{ textAlign: 'center', color: '#666', marginBottom: 16 }}>
+                      Nenhuma impressora encontrada.
+                    </Text>
+                    <Text style={{ textAlign: 'center', color: '#999', fontSize: 12 }}>
+                      Certifique-se de que:
+                      {"\n"}• O Bluetooth está ativado
+                      {"\n"}• A impressora está ligada
+                      {"\n"}• A impressora está pareada
+                      {"\n"}• A impressora é compatível com ESC/POS
+                    </Text>
+                  </View>
+                ) : (
+                  <RadioButton.Group
+                    onValueChange={value => setSelectedPrinter(value as PrinterType)}
+                    value={selectedPrinter || ''}
+                  >
+                    {availablePrinters.map((printer) => (
+                      <View key={printer.type} style={styles.radioItem}>
+                        <RadioButton.Item
+                          label={`${getPrinterDisplayName(printer.type)}${printer.deviceName ? ` (${printer.deviceName})` : ''}`}
+                          value={printer.type}
+                          status={selectedPrinter === printer.type ? 'checked' : 'unchecked'}
+                        />
+                        {selectedPrinter === printer.type && (
+                          <View style={styles.testConnectionContainer}>
+                            <Button
+                              mode="outlined"
+                              onPress={() => testSelectedPrinterConnection(printer)}
+                              loading={testingConnection}
+                              disabled={testingConnection}
+                              icon="bluetooth-connect"
+                              style={styles.testConnectionButton}
+                            >
+                              {testingConnection ? 'Testando...' : 'Testar Conexão'}
+                            </Button>
+                          </View>
+                        )}
+                      </View>
+                    ))}
+                  </RadioButton.Group>
+                )}
               </Card.Content>
               
               <Card.Actions>
                 <Button onPress={closePrinterModal}>Cancelar</Button>
-                <Button mode="contained" onPress={savePrinterConfig}>
+                <Button 
+                  mode="contained" 
+                  onPress={savePrinterConfig}
+                  disabled={!selectedPrinter || availablePrinters.length === 0}
+                >
                   Salvar
                 </Button>
               </Card.Actions>
@@ -479,6 +713,13 @@ const styles = StyleSheet.create({
     color: '#666',
   },
   radioItem: {
+    marginVertical: 4,
+  },
+  testConnectionContainer: {
+    marginTop: 8,
+    marginLeft: 32,
+  },
+  testConnectionButton: {
     marginVertical: 4,
   },
   bluetoothModalContainer: {

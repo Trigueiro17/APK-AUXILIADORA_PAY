@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -7,12 +7,20 @@ import {
   FlatList,
   TouchableOpacity,
   ActivityIndicator,
+  Dimensions,
+  Platform,
+  Vibration,
+  Animated,
 } from 'react-native';
-import { Switch, Button, Card, List, IconButton, Chip } from 'react-native-paper';
+import { Switch, Button, Card, List, IconButton, Chip, Surface } from 'react-native-paper';
 // @ts-ignore
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import bluetoothService, { BluetoothDevice, BluetoothState } from '../services/bluetoothService';
 import { State } from 'react-native-ble-plx';
+import BluetoothDiagnostic from '../utils/bluetoothDiagnostic';
+
+const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
+const isTablet = screenWidth > 768;
 
 interface BluetoothSettingsProps {
   onClose?: () => void;
@@ -28,6 +36,9 @@ const BluetoothSettings: React.FC<BluetoothSettingsProps> = ({ onClose }) => {
     bleState: 'Unknown' as State,
   });
   const [loading, setLoading] = useState(false);
+  const [selectedDevice, setSelectedDevice] = useState<string | null>(null);
+  const [scrollY] = useState(new Animated.Value(0));
+  const [isScrolling, setIsScrolling] = useState(false);
 
   useEffect(() => {
     try {
@@ -173,70 +184,159 @@ const BluetoothSettings: React.FC<BluetoothSettingsProps> = ({ onClose }) => {
     );
   };
 
-  const renderDeviceItem = ({ item }: { item: BluetoothDevice }) => {
+  const handleRunDiagnostic = async () => {
+    setLoading(true);
+    try {
+      await BluetoothDiagnostic.runFullDiagnostic();
+      const report = await BluetoothDiagnostic.generateDiagnosticReport();
+      
+      Alert.alert(
+        'Diagnóstico Concluído',
+        'Verifique o console para detalhes completos. Relatório gerado com sucesso.',
+        [
+          { text: 'OK' },
+          {
+            text: 'Ver Relatório',
+            onPress: () => {
+              Alert.alert('Relatório de Diagnóstico', report);
+            }
+          }
+        ]
+      );
+    } catch (error) {
+      Alert.alert('Erro no Diagnóstico', `${error}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Função para feedback tátil
+  const provideTactileFeedback = useCallback(() => {
+    if (Platform.OS === 'android') {
+      Vibration.vibrate(10); // Vibração suave de 10ms
+    }
+  }, []);
+
+  // Função otimizada para seleção de dispositivo
+  const handleDeviceSelection = useCallback((deviceId: string) => {
+    provideTactileFeedback();
+    setSelectedDevice(prev => prev === deviceId ? null : deviceId);
+  }, [provideTactileFeedback]);
+
+  // Renderização otimizada do item de dispositivo
+  const renderDeviceItem = useCallback(({ item, index }: { item: BluetoothDevice; index: number }) => {
     const isConnected = bluetoothState.connectedDevice?.id === item.id;
+    const isSelected = selectedDevice === item.id;
     
     return (
-      <Card style={styles.deviceCard}>
-        <View style={styles.deviceInfo}>
-          <View style={styles.deviceHeader}>
-            <Icon 
-              name={item.paired ? 'bluetooth-connected' : 'bluetooth'} 
-              size={24} 
-              color={isConnected ? '#4CAF50' : '#757575'} 
-            />
-            <View style={styles.deviceDetails}>
-              <Text style={styles.deviceName}>{item.name}</Text>
-              <Text style={styles.deviceAddress}>{item.address}</Text>
-            </View>
-            {isConnected && (
-              <Chip mode="flat" style={styles.connectedChip}>
-                Conectado
-              </Chip>
-            )}
-          </View>
-          
-          <View style={styles.deviceActions}>
-            {item.paired ? (
-              <>
-                {isConnected ? (
-                  <Button 
-                    mode="outlined" 
-                    onPress={handleDisconnectDevice}
-                    disabled={loading}
-                  >
-                    Desconectar
-                  </Button>
-                ) : (
-                  <Button 
-                    mode="contained" 
-                    onPress={() => handleConnectDevice(item)}
-                    disabled={loading}
-                  >
-                    Conectar
-                  </Button>
+      <Animated.View
+        style={[
+          styles.deviceCard,
+          isSelected && styles.selectedDeviceCard,
+          {
+            transform: [{
+              scale: scrollY.interpolate({
+                inputRange: [index * 100 - 50, index * 100, index * 100 + 50],
+                outputRange: [0.95, 1, 0.95],
+                extrapolate: 'clamp',
+              })
+            }]
+          }
+        ]}
+      >
+        <TouchableOpacity
+          onPress={() => handleDeviceSelection(item.id)}
+          activeOpacity={0.7}
+          style={styles.deviceTouchable}
+        >
+          <Surface style={[styles.deviceSurface, isSelected && styles.selectedDeviceSurface]} elevation={isSelected ? 4 : 2}>
+            <View style={styles.deviceInfo}>
+              <View style={styles.deviceHeader}>
+                <View style={styles.deviceIconContainer}>
+                  <Icon 
+                    name={item.paired ? 'bluetooth-connected' : 'bluetooth'} 
+                    size={isTablet ? 28 : 24} 
+                    color={isConnected ? '#4CAF50' : isSelected ? '#2196F3' : '#757575'} 
+                  />
+                  {isSelected && (
+                    <View style={styles.selectionIndicator}>
+                      <Icon name="check-circle" size={16} color="#2196F3" />
+                    </View>
+                  )}
+                </View>
+                <View style={styles.deviceDetails}>
+                  <Text style={[styles.deviceName, isSelected && styles.selectedDeviceName]}>
+                    {item.name}
+                  </Text>
+                  <Text style={[styles.deviceAddress, isSelected && styles.selectedDeviceAddress]}>
+                    {item.address}
+                  </Text>
+                  {item.paired && (
+                    <View style={styles.deviceStatusRow}>
+                      <Chip 
+                        mode="flat" 
+                        style={[styles.pairedChip, isSelected && styles.selectedChip]}
+                        textStyle={styles.chipText}
+                      >
+                        Pareado
+                      </Chip>
+                    </View>
+                  )}
+                </View>
+                {isConnected && (
+                  <Chip mode="flat" style={styles.connectedChip}>
+                    Conectado
+                  </Chip>
                 )}
-                <IconButton
-                  icon="delete"
-                  size={20}
-                  onPress={() => handleUnpairDevice(item)}
-                  disabled={loading}
-                />
-              </>
-            ) : (
-              <Button 
-                mode="contained" 
-                onPress={() => handlePairDevice(item)}
-                disabled={loading}
-              >
-                Parear
-              </Button>
-            )}
-          </View>
-        </View>
-      </Card>
+              </View>
+              
+              {isSelected && (
+                <Animated.View style={styles.deviceActions}>
+                  {item.paired ? (
+                    <>
+                      {isConnected ? (
+                        <Button 
+                          mode="outlined" 
+                          onPress={handleDisconnectDevice}
+                          disabled={loading}
+                          style={styles.actionButton}
+                        >
+                          Desconectar
+                        </Button>
+                      ) : (
+                        <Button 
+                          mode="contained" 
+                          onPress={() => handleConnectDevice(item)}
+                          disabled={loading}
+                          style={styles.actionButton}
+                        >
+                          Conectar
+                        </Button>
+                      )}
+                      <IconButton
+                        icon="delete"
+                        size={20}
+                        onPress={() => handleUnpairDevice(item)}
+                        disabled={loading}
+                      />
+                    </>
+                  ) : (
+                    <Button 
+                      mode="contained" 
+                      onPress={() => handlePairDevice(item)}
+                      disabled={loading}
+                    >
+                      Parear
+                    </Button>
+                  )}
+                </Animated.View>
+              )}
+            </View>
+          </Surface>
+        </TouchableOpacity>
+      </Animated.View>
     );
-  };
+  }, [bluetoothState.connectedDevice, selectedDevice, scrollY, handleDeviceSelection, handleConnectDevice, handleDisconnectDevice, handlePairDevice, handleUnpairDevice, loading]);
 
   return (
     <View style={styles.container}>
@@ -315,15 +415,64 @@ const BluetoothSettings: React.FC<BluetoothSettingsProps> = ({ onClose }) => {
             </View>
           </Card>
 
+          {/* Diagnóstico */}
+          <Card style={styles.card}>
+            <View style={styles.discoveryControls}>
+              <Text style={styles.sectionTitle}>Solução de Problemas</Text>
+              <View style={styles.discoveryButtons}>
+                <Button 
+                  mode="outlined" 
+                  onPress={handleRunDiagnostic}
+                  disabled={loading}
+                  icon="bug-check"
+                  style={styles.discoveryButton}
+                >
+                  Executar Diagnóstico
+                </Button>
+              </View>
+            </View>
+          </Card>
+
           {/* Lista de dispositivos pareados */}
           {bluetoothState.pairedDevices && bluetoothState.pairedDevices.length > 0 && (
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Dispositivos Pareados</Text>
-              <FlatList
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionTitle}>Dispositivos Pareados</Text>
+                <View style={styles.deviceCounter}>
+                  <Text style={styles.counterText}>{bluetoothState.pairedDevices.length}</Text>
+                </View>
+              </View>
+              <Animated.FlatList
                 data={bluetoothState.pairedDevices}
                 keyExtractor={(item) => item.id}
                 renderItem={renderDeviceItem}
-                showsVerticalScrollIndicator={false}
+                showsVerticalScrollIndicator={true}
+                indicatorStyle="black"
+                scrollIndicatorInsets={{ right: 2 }}
+                onScroll={Animated.event(
+                  [{ nativeEvent: { contentOffset: { y: scrollY } } }],
+                  { 
+                    useNativeDriver: true,
+                    listener: () => {
+                      if (!isScrolling) {
+                        setIsScrolling(true);
+                        setTimeout(() => setIsScrolling(false), 150);
+                      }
+                    }
+                  }
+                )}
+                scrollEventThrottle={16}
+                removeClippedSubviews={true}
+                maxToRenderPerBatch={10}
+                windowSize={10}
+                initialNumToRender={8}
+                getItemLayout={(data, index) => ({
+                  length: isTablet ? 120 : 100,
+                  offset: (isTablet ? 120 : 100) * index,
+                  index,
+                })}
+                style={styles.deviceList}
+                contentContainerStyle={styles.listContainer}
               />
             </View>
           )}
@@ -331,12 +480,43 @@ const BluetoothSettings: React.FC<BluetoothSettingsProps> = ({ onClose }) => {
           {/* Lista de dispositivos disponíveis */}
           {bluetoothState.devices && bluetoothState.devices.length > 0 && (
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Dispositivos Disponíveis</Text>
-              <FlatList
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionTitle}>Dispositivos Disponíveis</Text>
+                <View style={styles.deviceCounter}>
+                  <Text style={styles.counterText}>{bluetoothState.devices.length}</Text>
+                </View>
+              </View>
+              <Animated.FlatList
                 data={bluetoothState.devices}
                 keyExtractor={(item) => item.id}
                 renderItem={renderDeviceItem}
-                showsVerticalScrollIndicator={false}
+                showsVerticalScrollIndicator={true}
+                indicatorStyle="black"
+                scrollIndicatorInsets={{ right: 2 }}
+                onScroll={Animated.event(
+                  [{ nativeEvent: { contentOffset: { y: scrollY } } }],
+                  { 
+                    useNativeDriver: true,
+                    listener: () => {
+                      if (!isScrolling) {
+                        setIsScrolling(true);
+                        setTimeout(() => setIsScrolling(false), 150);
+                      }
+                    }
+                  }
+                )}
+                scrollEventThrottle={16}
+                removeClippedSubviews={true}
+                maxToRenderPerBatch={10}
+                windowSize={10}
+                initialNumToRender={8}
+                getItemLayout={(data, index) => ({
+                  length: isTablet ? 120 : 100,
+                  offset: (isTablet ? 120 : 100) * index,
+                  index,
+                })}
+                style={styles.deviceList}
+                contentContainerStyle={styles.listContainer}
               />
             </View>
           )}
@@ -414,37 +594,122 @@ const styles = StyleSheet.create({
     marginLeft: 12,
   },
   deviceCard: {
-    marginBottom: 8,
+    marginBottom: isTablet ? 12 : 8,
+    marginHorizontal: 4,
+  },
+  selectedDeviceCard: {
+    marginBottom: isTablet ? 16 : 12,
+    transform: [{ scale: 1.02 }],
+  },
+  deviceTouchable: {
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+  deviceSurface: {
+    borderRadius: 12,
+    backgroundColor: '#fff',
+  },
+  selectedDeviceSurface: {
+    backgroundColor: '#f8f9ff',
+    borderWidth: 2,
+    borderColor: '#2196F3',
   },
   deviceInfo: {
-    padding: 16,
+    padding: isTablet ? 20 : 16,
   },
   deviceHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 12,
+    marginBottom: 8,
+  },
+  deviceIconContainer: {
+    position: 'relative',
+    marginRight: 12,
+  },
+  selectionIndicator: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    backgroundColor: '#fff',
+    borderRadius: 10,
+    elevation: 2,
   },
   deviceDetails: {
     flex: 1,
-    marginLeft: 12,
   },
   deviceName: {
-    fontSize: 16,
+    fontSize: isTablet ? 18 : 16,
     fontWeight: 'bold',
     color: '#333',
+    marginBottom: 4,
+  },
+  selectedDeviceName: {
+    color: '#2196F3',
   },
   deviceAddress: {
-    fontSize: 12,
+    fontSize: isTablet ? 14 : 12,
     color: '#757575',
-    marginTop: 2,
+    marginBottom: 4,
+  },
+  selectedDeviceAddress: {
+    color: '#1976D2',
+  },
+  deviceStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 4,
+  },
+  pairedChip: {
+    backgroundColor: '#E3F2FD',
+    height: 24,
+  },
+  selectedChip: {
+    backgroundColor: '#BBDEFB',
+  },
+  chipText: {
+    fontSize: 10,
+    color: '#1976D2',
   },
   connectedChip: {
     backgroundColor: '#E8F5E8',
+    height: 28,
   },
   deviceActions: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'flex-end',
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#E0E0E0',
+  },
+  actionButton: {
+    marginLeft: 8,
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  deviceCounter: {
+    backgroundColor: '#2196F3',
+    borderRadius: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    minWidth: 24,
+    alignItems: 'center',
+  },
+  counterText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  deviceList: {
+    maxHeight: screenHeight * 0.4,
+  },
+  listContainer: {
+    paddingBottom: 16,
   },
   emptyState: {
     alignItems: 'center',

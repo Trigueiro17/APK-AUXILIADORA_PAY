@@ -1,9 +1,23 @@
 import { Alert } from 'react-native';
 import bluetoothService, { BluetoothDevice } from './bluetoothService';
-import ThermalPrinter from 'react-native-thermal-printer';
+import {
+  BluetoothEscposPrinter,
+  BluetoothManager,
+  BluetoothTscPrinter
+} from '@brooons/react-native-bluetooth-escpos-printer';
 
-// Tipos de impressoras suportadas
-export type PrinterType = 'moderninha_smart_2' | 'mercado_pago_point_smart' | 'mini_thermal_58mm' | 'mpt_ii_pos_mini_58mm';
+// Nova arquitetura modular de impressoras
+import { IPrinterAdapter, PrinterType as AdapterPrinterType } from './printers/IPrinterAdapter';
+import { PrinterAdapterFactory, PrinterAdapterDetector } from './printers/PrinterAdapterFactory';
+
+// Tipos de impressoras suportadas (mantido para compatibilidade)
+export type PrinterType = 'mini_thermal_58mm' | 'mpt_ii_pos_mini_58mm';
+
+// Mapeamento entre tipos antigos e novos
+const PRINTER_TYPE_MAPPING: Record<PrinterType, AdapterPrinterType> = {
+  'mini_thermal_58mm': AdapterPrinterType.BLUETOOTH_ESCPOS,
+  'mpt_ii_pos_mini_58mm': AdapterPrinterType.BLUETOOTH_ESCPOS
+};
 
 // Interface para configuração da impressora
 export interface PrinterConfig {
@@ -53,12 +67,87 @@ const ESC_POS_COMMANDS = {
 
 class PrintService {
   private printerConfig: PrinterConfig | null = null;
+  private printerAdapter: IPrinterAdapter | null = null;
+  private currentAdapterType: AdapterPrinterType | null = null;
 
   // Configurar impressora
   setPrinterConfig(config: PrinterConfig): void {
     this.printerConfig = config;
     // Configuração salva apenas em memória (sem persistência local)
     console.log('Configuração da impressora salva:', config);
+  }
+
+  // Métodos da nova arquitetura modular
+  async initializeAdapter(adapterType?: AdapterPrinterType): Promise<boolean> {
+    try {
+      // Se não especificado, detecta automaticamente
+      const targetType = adapterType || await PrinterAdapterDetector.detectBestAdapter();
+      
+      if (!targetType) {
+        console.error('Nenhum adapter de impressora disponível');
+        return false;
+      }
+
+      // Cria novo adapter se necessário
+      if (this.currentAdapterType !== targetType) {
+        this.printerAdapter = PrinterAdapterFactory.createAdapter({ type: targetType });
+        this.currentAdapterType = targetType;
+      }
+
+      // Inicializa o adapter
+      await this.printerAdapter!.initialize();
+      console.log(`Adapter ${targetType} inicializado com sucesso`);
+      return true;
+    } catch (error) {
+      console.error('Erro ao inicializar adapter:', error);
+      return false;
+    }
+  }
+
+  async connectWithAdapter(deviceAddress: string): Promise<boolean> {
+    if (!this.printerAdapter) {
+      const initialized = await this.initializeAdapter();
+      if (!initialized) return false;
+    }
+
+    try {
+      const connected = await this.printerAdapter!.connect(deviceAddress);
+      if (connected) {
+        console.log('Conectado via adapter:', deviceAddress);
+      }
+      return connected;
+    } catch (error) {
+      console.error('Erro ao conectar via adapter:', error);
+      return false;
+    }
+  }
+
+  async printWithAdapter(text: string): Promise<boolean> {
+    if (!this.printerAdapter) {
+      console.error('Adapter não inicializado');
+      return false;
+    }
+
+    try {
+      const isConnected = await this.printerAdapter.isConnected();
+      if (!isConnected) {
+        console.error('Impressora não conectada');
+        return false;
+      }
+
+      return await this.printerAdapter.printText(text);
+    } catch (error) {
+      console.error('Erro ao imprimir via adapter:', error);
+      return false;
+    }
+  }
+
+  getAdapter(): IPrinterAdapter | null {
+    return this.printerAdapter;
+  }
+
+  getCurrentAdapterType(): AdapterPrinterType | null {
+    return this.currentAdapterType;
   }
 
   // Configurar impressora Bluetooth
@@ -102,27 +191,13 @@ class PrintService {
       
       this.setPrinterConfig(config);
       
-      // Tentar conectar com ThermalPrinter
-      try {
-        await ThermalPrinter.init();
-        const connected = await bluetoothService.connectDevice(device);
-        
-        if (connected) {
-          config.isConnected = true;
-          this.setPrinterConfig(config);
-          console.log('MPT-II pos Mini 58mm conectada com sucesso');
-          return true;
-        }
-      } catch (thermalError) {
-        console.log('ThermalPrinter não disponível, usando conexão Bluetooth padrão');
-        // Fallback para conexão Bluetooth padrão
-        const connected = await bluetoothService.connectDevice(device);
-        if (connected) {
-          config.isConnected = true;
-          this.setPrinterConfig(config);
-          console.log('MPT-II conectada via Bluetooth padrão');
-          return true;
-        }
+      // Tentar conectar com o dispositivo
+      const connected = await bluetoothService.connectDevice(device);
+      if (connected) {
+        config.isConnected = true;
+        this.setPrinterConfig(config);
+        console.log('MPT-II pos Mini 58mm conectada com sucesso');
+        return true;
       }
       
       return false;
@@ -140,6 +215,66 @@ class PrintService {
   // Verificar se a impressora está configurada
   isPrinterConfigured(): boolean {
     return this.printerConfig !== null && this.printerConfig.isConnected;
+  }
+
+  // Verificar se a impressora está conectada
+  isPrinterConnected(): boolean {
+    return this.printerConfig?.isConnected || false;
+  }
+
+  // Testar conectividade da nova biblioteca BluetoothEscposPrinter
+  async testBluetoothConnection(): Promise<boolean> {
+    try {
+      // Verificar se o Bluetooth está habilitado
+      const isEnabled = await BluetoothManager.checkBluetoothEnabled();
+      if (!isEnabled) {
+        console.log('Bluetooth não está habilitado');
+        return false;
+      }
+
+      // Verificar dispositivos pareados
+      const scanResult = await BluetoothManager.scanDevices();
+      const parsedResult = JSON.parse(scanResult);
+      const pairedDevices = parsedResult.paired || [];
+      console.log('Dispositivos pareados:', pairedDevices);
+
+      return pairedDevices.length > 0;
+    } catch (error) {
+      console.error('Erro ao testar conectividade Bluetooth:', error);
+      return false;
+    }
+  }
+
+  // Imprimir teste para verificar funcionamento
+  async printTest(): Promise<boolean> {
+    try {
+      if (!this.printerConfig?.bluetoothDevice) {
+        console.error('Nenhuma impressora configurada para teste');
+        return false;
+      }
+
+      // Conectar com a impressora
+      try {
+        await BluetoothManager.connect(this.printerConfig.bluetoothDevice.address);
+        console.log('Conectado com sucesso à impressora');
+      } catch (error) {
+        console.error('Falha ao conectar para teste:', error);
+        return false;
+      }
+
+      // Imprimir teste simples
+      await BluetoothEscposPrinter.printerInit();
+      await BluetoothEscposPrinter.printText('=== TESTE DE IMPRESSÃO ===\n', {});
+      await BluetoothEscposPrinter.printText('Impressora Bluetooth funcionando!\n', {});
+      await BluetoothEscposPrinter.printText('Data: ' + new Date().toLocaleString() + '\n', {});
+      await BluetoothEscposPrinter.printText('===============================\n\n\n', {});
+      
+      console.log('Teste de impressão concluído com sucesso');
+      return true;
+    } catch (error) {
+      console.error('Erro no teste de impressão:', error);
+      return false;
+    }
   }
 
   // Gerar template de recibo formatado para impressora térmica 58mm
@@ -222,12 +357,8 @@ class PrintService {
     }
 
     try {
-      // Aqui seria implementada a lógica específica para cada tipo de impressora
+      // Implementar lógica de conexão para impressoras térmicas Bluetooth
       switch (this.printerConfig.type) {
-        case 'moderninha_smart_2':
-          return await this.connectModerninhaSmartV2();
-        case 'mercado_pago_point_smart':
-          return await this.connectMercadoPagoPointSmart();
         case 'mini_thermal_58mm':
           return await this.connectMiniThermal58mm();
         case 'mpt_ii_pos_mini_58mm':
@@ -241,34 +372,6 @@ class PrintService {
     }
   }
 
-  // Conectar com Moderninha Smart V2
-  private async connectModerninhaSmartV2(): Promise<boolean> {
-    // Implementação específica para Moderninha Smart V2
-    // Esta seria a integração real com o SDK da PagSeguro
-    console.log('Conectando com Moderninha Smart V2...');
-    
-    // Simulação de conexão
-    return new Promise((resolve) => {
-      setTimeout(() => {
-        resolve(true);
-      }, 1000);
-    });
-  }
-
-  // Conectar com Mercado Pago Point Smart
-  private async connectMercadoPagoPointSmart(): Promise<boolean> {
-    // Implementação específica para Mercado Pago Point Smart
-    // Esta seria a integração real com o SDK do Mercado Pago
-    console.log('Conectando com Mercado Pago Point Smart...');
-    
-    // Simulação de conexão
-    return new Promise((resolve) => {
-      setTimeout(() => {
-        resolve(true);
-      }, 1000);
-    });
-  }
-
   // Conectar com Mini Impressora Térmica Bluetooth 58mm
   private async connectMiniThermal58mm(): Promise<boolean> {
     try {
@@ -276,9 +379,16 @@ class PrintService {
       
       // Verificar se há um dispositivo Bluetooth configurado
       if (this.printerConfig?.bluetoothDevice) {
-        const success = await bluetoothService.connectDevice(this.printerConfig.bluetoothDevice);
+        // Usar BluetoothManager da nova biblioteca
+        const isEnabled = await BluetoothManager.checkBluetoothEnabled();
+        if (!isEnabled) {
+          await BluetoothManager.enableBluetooth();
+        }
+        
+        await BluetoothManager.connect(this.printerConfig.bluetoothDevice.address);
+        const success = true;
         if (success) {
-          console.log('Conectado via Bluetooth com sucesso');
+          console.log('Conectado via BluetoothEscposPrinter com sucesso');
           return true;
         }
       }
@@ -310,10 +420,17 @@ class PrintService {
       
       // Verificar se há um dispositivo configurado
       if (this.printerConfig?.bluetoothDevice) {
-        const connected = await bluetoothService.connectDevice(this.printerConfig.bluetoothDevice);
+        // Usar BluetoothManager da nova biblioteca
+        const isEnabled = await BluetoothManager.checkBluetoothEnabled();
+        if (!isEnabled) {
+          await BluetoothManager.enableBluetooth();
+        }
+        
+        await BluetoothManager.connect(this.printerConfig.bluetoothDevice.address);
+        const connected = true;
         
         if (connected) {
-          console.log('MPT-II conectada com sucesso via Bluetooth');
+          console.log('MPT-II conectada com sucesso via BluetoothEscposPrinter');
           return true;
         }
       }
@@ -329,6 +446,12 @@ class PrintService {
   // Imprimir recibo
   async printReceipt(receiptData: ReceiptData): Promise<boolean> {
     try {
+      // Tentar usar o novo adapter primeiro
+      if (this.printerAdapter) {
+        return await this.printReceiptWithAdapter(receiptData);
+      }
+
+      // Fallback para o método legado
       if (!this.isPrinterConfigured()) {
         Alert.alert(
           'Impressora não configurada',
@@ -376,6 +499,52 @@ class PrintService {
     }
   }
 
+  // Método para imprimir recibo usando o novo adapter
+  private async printReceiptWithAdapter(receiptData: ReceiptData): Promise<boolean> {
+    try {
+      const isConnected = await this.printerAdapter!.isConnected();
+      if (!isConnected) {
+        Alert.alert(
+          'Erro de conexão',
+          'Impressora não conectada. Verifique a conexão.'
+        );
+        return false;
+      }
+
+      // Gerar template do recibo
+      const receiptTemplate = this.generateReceiptTemplate(receiptData);
+
+      // Imprimir usando o adapter
+      const printed = await this.printerAdapter!.printText(receiptTemplate);
+      
+      if (printed) {
+        // Cortar papel se suportado
+        await this.printerAdapter!.cutPaper().catch(() => {
+          console.log('Corte de papel não suportado ou falhou');
+        });
+        
+        Alert.alert(
+          'Sucesso',
+          'Recibo impresso com sucesso!'
+        );
+        return true;
+      } else {
+        Alert.alert(
+          'Erro na impressão',
+          'Ocorreu um erro durante a impressão. Tente novamente.'
+        );
+        return false;
+      }
+    } catch (error) {
+      console.error('Erro ao imprimir recibo via adapter:', error);
+      Alert.alert(
+        'Erro',
+        'Ocorreu um erro inesperado durante a impressão.'
+      );
+      return false;
+    }
+  }
+
   // Enviar dados para a impressora
   private async sendToPrinter(data: string): Promise<boolean> {
     try {
@@ -383,10 +552,6 @@ class PrintService {
       // dependendo do tipo de impressora configurada
       
       switch (this.printerConfig?.type) {
-        case 'moderninha_smart_2':
-          return await this.printModerninhaSmartV2(data);
-        case 'mercado_pago_point_smart':
-          return await this.printMercadoPagoPointSmart(data);
         case 'mini_thermal_58mm':
           return await this.printMiniThermal58mm(data);
         case 'mpt_ii_pos_mini_58mm':
@@ -398,32 +563,6 @@ class PrintService {
       console.error('Erro ao enviar dados para impressora:', error);
       return false;
     }
-  }
-
-  // Imprimir via Moderninha Smart V2
-  private async printModerninhaSmartV2(data: string): Promise<boolean> {
-    // Implementação específica para impressão via Moderninha Smart V2
-    console.log('Imprimindo via Moderninha Smart V2:', data);
-    
-    // Simulação de impressão
-    return new Promise((resolve) => {
-      setTimeout(() => {
-        resolve(true);
-      }, 2000);
-    });
-  }
-
-  // Imprimir via Mercado Pago Point Smart
-  private async printMercadoPagoPointSmart(data: string): Promise<boolean> {
-    // Implementação específica para impressão via Mercado Pago Point Smart
-    console.log('Imprimindo via Mercado Pago Point Smart:', data);
-    
-    // Simulação de impressão
-    return new Promise((resolve) => {
-      setTimeout(() => {
-        resolve(true);
-      }, 2000);
-    });
   }
 
   // Imprimir via Mini Impressora Térmica 58mm
@@ -438,17 +577,16 @@ class PrintService {
         return false;
       }
       
-      // Enviar dados via Bluetooth
-      const success = await bluetoothService.sendData(data);
-      if (success) {
-        console.log('Dados enviados via Bluetooth com sucesso');
-        return true;
-      } else {
-        console.error('Falha ao enviar dados via Bluetooth');
-        return false;
-      }
+      // Usar a nova biblioteca BluetoothEscposPrinter
+      await BluetoothEscposPrinter.printerInit();
+      await BluetoothEscposPrinter.printText(data, {});
+      await BluetoothEscposPrinter.printText('\n\n\n', {});
+      await BluetoothEscposPrinter.printerLeftSpace(0);
+      
+      console.log('Dados enviados via BluetoothEscposPrinter com sucesso');
+      return true;
     } catch (error) {
-      console.error('Erro ao imprimir via Bluetooth:', error);
+      console.error('Erro ao imprimir via BluetoothEscposPrinter:', error);
       return false;
     }
   }
@@ -465,24 +603,14 @@ class PrintService {
         return false;
       }
       
-      // Tentar usar ThermalPrinter se disponível
-      try {
-        await ThermalPrinter.printText(data);
-        console.log('Impressão MPT-II via ThermalPrinter concluída');
-        return true;
-      } catch (thermalError) {
-        console.log('ThermalPrinter não disponível, usando Bluetooth padrão');
-        
-        // Fallback: enviar dados via Bluetooth padrão
-        const success = await bluetoothService.sendData(data);
-        if (success) {
-          console.log('Impressão MPT-II via Bluetooth padrão concluída');
-          return true;
-        } else {
-          console.error('Falha ao enviar dados via Bluetooth para MPT-II');
-          return false;
-        }
-      }
+      // Usar a nova biblioteca BluetoothEscposPrinter para MPT-II
+      await BluetoothEscposPrinter.printerInit();
+      await BluetoothEscposPrinter.printText(data, {});
+      await BluetoothEscposPrinter.printText('\n\n\n', {});
+      await BluetoothEscposPrinter.printerLeftSpace(0);
+      
+      console.log('Impressão MPT-II via BluetoothEscposPrinter concluída');
+      return true;
     } catch (error) {
       console.error('Erro ao imprimir via MPT-II:', error);
       return false;
@@ -517,29 +645,64 @@ class PrintService {
 
   // Listar impressoras disponíveis
   async getAvailablePrinters(): Promise<PrinterConfig[]> {
-    const printers: PrinterConfig[] = [
-      {
-        type: 'moderninha_smart_2',
-        deviceName: 'Moderninha Smart V2',
-        isConnected: false
-      },
-      {
-        type: 'mercado_pago_point_smart',
-        deviceName: 'Mercado Pago Point Smart',
-        isConnected: false
-      }
-    ];
+    const printers: PrinterConfig[] = [];
 
     try {
-      // Adicionar dispositivos Bluetooth pareados como impressoras térmicas
+      console.log('🔍 [PrintService] Iniciando busca por impressoras...');
+      
+      // Verificar se o Bluetooth está habilitado
+      const bluetoothState = bluetoothService.getState();
+      console.log('📱 [PrintService] Estado do Bluetooth:', {
+        enabled: bluetoothState.enabled,
+        bleState: bluetoothState.bleState,
+        discovering: bluetoothState.discovering
+      });
+      
+      if (!bluetoothState.enabled) {
+        console.warn('⚠️ [PrintService] Bluetooth não está habilitado');
+        return printers;
+      }
+      
+      // Buscar dispositivos Bluetooth pareados (BLE e clássicos)
       const pairedDevices = await bluetoothService.getPairedDevices();
+      const classicDevices = await bluetoothService.getClassicBluetoothDevices();
       const connectedDevice = bluetoothService.getConnectedDevice();
       
-      pairedDevices.forEach(device => {
+      // Combinar dispositivos BLE e clássicos
+      const allDevices = [...pairedDevices, ...classicDevices];
+      
+      // Remover duplicatas baseado no endereço MAC
+      const uniqueDevices = allDevices.filter((device, index, self) => 
+        index === self.findIndex(d => d.address === device.address)
+      );
+      
+      console.log('📋 [PrintService] Dispositivos BLE encontrados:', pairedDevices.length);
+      console.log('📱 [PrintService] Dispositivos clássicos encontrados:', classicDevices.length);
+      console.log('📋 [PrintService] Total de dispositivos únicos:', uniqueDevices.length);
+      console.log('🔗 [PrintService] Dispositivo conectado:', connectedDevice?.name || 'Nenhum');
+      
+      // Log de todos os dispositivos encontrados
+      uniqueDevices.forEach((device, index) => {
+        console.log(`📱 [PrintService] Dispositivo ${index + 1}:`, {
+          name: device.name,
+          address: device.address,
+          paired: device.paired,
+          connected: device.connected
+        });
+      });
+      
+      // Verificar cada dispositivo único
+      for (const device of uniqueDevices) {
         // Filtrar dispositivos que podem ser impressoras (baseado no nome ou tipo)
-        if (this.isLikelyPrinter(device.name)) {
+        const isLikelyPrinter = this.isLikelyPrinter(device.name);
+        console.log(`🖨️ [PrintService] É provável impressora? ${isLikelyPrinter} (${device.name})`);
+        
+        if (isLikelyPrinter) {
           // Detectar se é especificamente uma MPT-II
-          const printerType = this.isMPTIIPrinter(device.name) ? 'mpt_ii_pos_mini_58mm' : 'mini_thermal_58mm';
+          const isMPTII = this.isMPTIIPrinter(device.name);
+          const printerType = isMPTII ? 'mpt_ii_pos_mini_58mm' : 'mini_thermal_58mm';
+          
+          console.log(`✅ [PrintService] Impressora detectada: ${device.name} (Tipo: ${printerType})`);
           
           printers.push({
             type: printerType,
@@ -549,9 +712,12 @@ class PrintService {
             bluetoothDevice: device
           });
         }
-      });
+      }
+      
+      console.log(`🎯 [PrintService] Total de impressoras encontradas: ${printers.length}`);
+      
     } catch (error) {
-      console.error('Erro ao buscar dispositivos Bluetooth:', error);
+      console.error('❌ [PrintService] Erro ao buscar dispositivos Bluetooth:', error);
     }
 
     return printers;
@@ -562,11 +728,20 @@ class PrintService {
     const printerKeywords = [
       'printer', 'print', 'thermal', 'pos', 'receipt', 
       'impressora', 'termica', 'cupom', 'ticket',
-      'rp', 'tm', 'ep', 'zj', 'xp', 'mpt', 'mini'
+      'rp', 'tm', 'ep', 'zj', 'xp', 'mpt', 'mini',
+      'escpos', 'esc/pos', 'bluetooth printer', 'bt printer'
     ];
     
     const lowerName = deviceName.toLowerCase();
-    return printerKeywords.some(keyword => lowerName.includes(keyword));
+    const isMatch = printerKeywords.some(keyword => lowerName.includes(keyword));
+    
+    console.log(`🔍 [PrintService] Verificando '${deviceName}' contra palavras-chave:`, {
+      deviceName: lowerName,
+      keywords: printerKeywords,
+      isMatch
+    });
+    
+    return isMatch;
   }
 
   // Verificar se um dispositivo é especificamente uma MPT-II
@@ -577,7 +752,15 @@ class PrintService {
     ];
     
     const lowerName = deviceName.toLowerCase();
-    return mptKeywords.some(keyword => lowerName.includes(keyword));
+    const isMatch = mptKeywords.some(keyword => lowerName.includes(keyword));
+    
+    console.log(`🔍 [PrintService] Verificando MPT-II '${deviceName}':`, {
+      deviceName: lowerName,
+      keywords: mptKeywords,
+      isMatch
+    });
+    
+    return isMatch;
   }
 }
 
