@@ -7,8 +7,9 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Search, Plus, Edit, Trash2, DollarSign, User, Calendar, Loader2, Settings } from "lucide-react";
-import { apiClient, CashRegister } from "@/lib/api";
+import { apiClient, CashRegister, User as UserType } from "@/lib/api";
 import CashRegisterConfig from "@/components/CashRegisterConfig";
 import { CompactSyncStatus, DetailedSyncStatus } from "@/components/SyncStatus";
 
@@ -17,6 +18,7 @@ export default function CashRegistersPage() {
   const [statusFilter, setStatusFilter] = useState("all");
   const [userFilter] = useState("all");
   const [cashRegisters, setCashRegisters] = useState<CashRegister[]>([]);
+  const [users, setUsers] = useState<UserType[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showCreateForm, setShowCreateForm] = useState(false);
@@ -27,10 +29,28 @@ export default function CashRegistersPage() {
   const [selectedCashRegister, setSelectedCashRegister] = useState<CashRegister | null>(null);
   const [configDialogOpen, setConfigDialogOpen] = useState(false);
 
-  // Carregar caixas registradoras da API
+  // Carregar caixas registradoras e usuários da API
   useEffect(() => {
-    loadCashRegisters();
+    loadData();
   }, []);
+
+  const loadData = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const [cashRegistersData, usersData] = await Promise.all([
+        apiClient.getCashRegisters(),
+        apiClient.getUsers()
+      ]);
+      setCashRegisters(cashRegistersData);
+      setUsers(usersData);
+    } catch (err) {
+      setError('Erro ao carregar dados');
+      console.error('Erro ao carregar dados:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const loadCashRegisters = async () => {
     try {
@@ -46,10 +66,15 @@ export default function CashRegistersPage() {
     }
   };
 
+  // Função para obter o nome do usuário pelo ID
+  const getUserName = (userId: string): string => {
+    const user = users.find(u => u.id === userId);
+    return user ? user.name : `Usuário ${userId}`;
+  };
+
   // Filtrar caixas registradoras
   const filteredCashRegisters = cashRegisters.filter(cashRegister => {
     const matchesSearch = searchTerm === "" || 
-      cashRegister.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
       cashRegister.userId.toLowerCase().includes(searchTerm.toLowerCase());
     
     const matchesStatus = statusFilter === "all" || cashRegister.status === statusFilter;
@@ -60,7 +85,7 @@ export default function CashRegistersPage() {
 
   const createCashRegister = async () => {
     if (!newCashRegister.userId) {
-      setError('ID do usuário é obrigatório');
+      setError('Usuário é obrigatório');
       return;
     }
 
@@ -186,13 +211,22 @@ export default function CashRegistersPage() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div>
-              <Label htmlFor="userId">ID do Usuário *</Label>
-              <Input
-                id="userId"
-                placeholder="Digite o ID do usuário"
+              <Label htmlFor="userId">Usuário *</Label>
+              <Select
                 value={newCashRegister.userId}
-                onChange={(e) => setNewCashRegister({ ...newCashRegister, userId: e.target.value })}
-              />
+                onValueChange={(value) => setNewCashRegister({ ...newCashRegister, userId: value })}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Selecione um usuário" />
+                </SelectTrigger>
+                <SelectContent>
+                  {users.map((user) => (
+                    <SelectItem key={user.id} value={user.id}>
+                      {user.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <div>
               <Label htmlFor="initialAmount">Valor Inicial</Label>
@@ -280,7 +314,7 @@ export default function CashRegistersPage() {
                   <div className="flex items-center justify-between">
                     <div className="flex-1">
                       <div className="flex items-center gap-3 mb-2">
-                        <h3 className="font-semibold">Caixa #{cashRegister.id}</h3>
+                        <h3 className="font-semibold">Caixa Registradora</h3>
                         <Badge variant={cashRegister.status === 'OPEN' ? "default" : "destructive"}>
                           {cashRegister.status === 'OPEN' ? "Aberto" : "Fechado"}
                         </Badge>
@@ -288,7 +322,7 @@ export default function CashRegistersPage() {
                       <div className="flex items-center gap-4 text-sm">
                         <span className="flex items-center gap-1">
                           <User className="h-4 w-4" />
-                          Usuário: {cashRegister.userId}
+                          Usuário: {getUserName(cashRegister.userId)}
                         </span>
                         <span className="flex items-center gap-1">
                           <DollarSign className="h-4 w-4" />
@@ -341,7 +375,7 @@ export default function CashRegistersPage() {
                         <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
                           <DialogHeader>
                             <DialogTitle>
-                              Configuração - Caixa #{selectedCashRegister?.id}
+                              Configuração da Caixa Registradora
                             </DialogTitle>
                             <DialogDescription>
                               Configure as integrações e parâmetros da caixa registradora

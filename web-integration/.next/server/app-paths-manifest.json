@@ -1,8 +1,11 @@
 {
   "/not-found": "app/not-found.js",
-  "/sales/page": "app/sales/page.js",
-  "/api/sales/route": "app/api/sales/route.js",
-  "/users/page": "app/users/page.js",
-  "/api/users/route": "app/api/users/route.js",
-  "/api/health/route": "app/api/health/route.js"
+  "/api/health/route": "app/api/health/route.js",
+  "/page": "app/page.js",
+  "/login/page": "app/login/page.js",
+  "/api/dashboard/metrics/route": "app/api/dashboard/metrics/route.js",
+  "/api/dashboard/recent-activities/route": "app/api/dashboard/recent-activities/route.js",
+  "/api/dashboard/stats/route": "app/api/dashboard/stats/route.js",
+  "/api/dashboard/route": "app/api/dashboard/route.js",
+  "/api/auth/verify/route": "app/api/auth/verify/route.js"
 }

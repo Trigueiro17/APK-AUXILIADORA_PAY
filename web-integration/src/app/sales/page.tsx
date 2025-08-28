@@ -43,8 +43,7 @@ export default function SalesPage() {
     // Filtrar por termo de busca
     const matchesSearch = searchTerm === '' ||
       sale.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      sale.user?.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      sale.cashRegister?.id?.toLowerCase().includes(searchTerm.toLowerCase());
+      sale.user?.name?.toLowerCase().includes(searchTerm.toLowerCase());
 
     // Filtrar por status
     const matchesStatus = selectedStatus === 'all' || sale.status === selectedStatus;

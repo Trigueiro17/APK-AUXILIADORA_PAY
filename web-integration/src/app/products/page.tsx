@@ -256,7 +256,6 @@ export default function ProductsPage() {
                           {product.description || 'Sem descrição'}
                         </p>
                         <div className="flex items-center gap-4 mt-2">
-                          <span className="text-sm font-medium">ID: {product.id}</span>
                           <span className="text-sm">Criado em: {new Date(product.createdAt).toLocaleDateString()}</span>
                         </div>
                       </div>
