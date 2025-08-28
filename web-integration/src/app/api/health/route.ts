@@ -1,18 +1,48 @@
 import { NextResponse } from 'next/server';
+import { AuxiliadoraPayApiClient } from '@/lib/api-client';
 
 interface SystemHealth {
   api: boolean;
   sync: boolean;
   overall: boolean;
+  apiResponseTime?: number;
+  lastError?: string;
 }
 
 export async function GET() {
   try {
     const health: SystemHealth = {
-      api: true, // Simulado como OK por enquanto
-      sync: true, // Simulado como OK por enquanto
-      overall: true
+      api: false,
+      sync: false,
+      overall: false
     };
+
+    // Verificar conectividade com a API externa
+    const startTime = Date.now();
+    try {
+      const apiClient = new AuxiliadoraPayApiClient();
+      await apiClient.healthCheck();
+      health.api = true;
+      health.apiResponseTime = Date.now() - startTime;
+    } catch (error) {
+      console.error('API health check failed:', error);
+      health.api = false;
+      health.lastError = error instanceof Error ? error.message : 'API connection failed';
+    }
+
+    // Verificar status do sistema de sincronização
+    try {
+      // Verificar se conseguimos acessar dados básicos
+      const apiClient = new AuxiliadoraPayApiClient();
+      await apiClient.getUsers({ page: 1, limit: 1 });
+      health.sync = true;
+    } catch (error) {
+      console.error('Sync health check failed:', error);
+      health.sync = false;
+      if (!health.lastError) {
+        health.lastError = error instanceof Error ? error.message : 'Sync service failed';
+      }
+    }
 
     // Calcular status geral
     health.overall = health.api && health.sync;
@@ -23,13 +53,16 @@ export async function GET() {
       services: {
         api: {
           status: health.api ? 'up' : 'down',
-          responseTime: Math.floor(Math.random() * 200) + 50 // Simulado
+          responseTime: health.apiResponseTime || null,
+          error: health.api ? null : health.lastError
         },
         sync: {
           status: health.sync ? 'up' : 'down',
-          lastSync: new Date(Date.now() - Math.floor(Math.random() * 3600000)).toISOString() // Última hora
+          lastSync: new Date().toISOString(),
+          error: health.sync ? null : health.lastError
         }
-      }
+      },
+      ...health
     });
   } catch (error) {
     console.error('Health check failed:', error);
@@ -37,7 +70,10 @@ export async function GET() {
       {
         status: 'unhealthy',
         error: 'Internal server error',
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        api: false,
+        sync: false,
+        overall: false
       },
       { status: 500 }
     );

@@ -7,26 +7,41 @@ import { ThemeProvider } from 'next-themes';
 import { Toaster } from 'sonner';
 
 // Configuração do React Query
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      staleTime: 5 * 60 * 1000, // 5 minutos
-      gcTime: 10 * 60 * 1000, // 10 minutos
-      retry: (failureCount, error: any) => {
-        // Não tenta novamente para erros 4xx
-        if (error?.status >= 400 && error?.status < 500) {
-          return false;
-        }
-        // Máximo 3 tentativas para outros erros
-        return failureCount < 3;
+function makeQueryClient() {
+  return new QueryClient({
+    defaultOptions: {
+      queries: {
+        staleTime: 5 * 60 * 1000, // 5 minutos
+        gcTime: 10 * 60 * 1000, // 10 minutos
+        retry: (failureCount, error: any) => {
+          // Não tenta novamente para erros 4xx
+          if (error?.status >= 400 && error?.status < 500) {
+            return false;
+          }
+          // Máximo 3 tentativas para outros erros
+          return failureCount < 3;
+        },
+        retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 30000),
       },
-      retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 30000),
+      mutations: {
+        retry: 1,
+      },
     },
-    mutations: {
-      retry: 1,
-    },
-  },
-});
+  });
+}
+
+let browserQueryClient: QueryClient | undefined = undefined;
+
+function getQueryClient() {
+  if (typeof window === 'undefined') {
+    // Server: sempre cria um novo query client
+    return makeQueryClient();
+  } else {
+    // Browser: cria um novo query client se não existir
+    if (!browserQueryClient) browserQueryClient = makeQueryClient();
+    return browserQueryClient;
+  }
+}
 
 /**
  * Context para configuração da aplicação
@@ -253,6 +268,8 @@ function SyncProvider({ children }: { children: React.ReactNode }) {
  * Provider principal que combina todos os providers
  */
 export function Providers({ children }: { children: React.ReactNode }) {
+  const queryClient = getQueryClient();
+  
   return (
     <QueryClientProvider client={queryClient}>
       <ThemeProvider
@@ -260,6 +277,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
         defaultTheme="system"
         enableSystem
         disableTransitionOnChange
+        suppressHydrationWarning
       >
         <AppConfigContext.Provider
           value={{
@@ -325,8 +343,17 @@ export function useGlobalLoading() {
 export function useConnectionStatus() {
   const [isOnline, setIsOnline] = React.useState(true);
   const [isApiConnected, setIsApiConnected] = React.useState(true);
+  const [isClient, setIsClient] = React.useState(false);
+
+  // Verifica se está no cliente
+  React.useEffect(() => {
+    setIsClient(true);
+    setIsOnline(navigator.onLine);
+  }, []);
 
   React.useEffect(() => {
+    if (!isClient) return;
+    
     const handleOnline = () => setIsOnline(true);
     const handleOffline = () => setIsOnline(false);
 
@@ -337,7 +364,7 @@ export function useConnectionStatus() {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
-  }, []);
+  }, [isClient]);
 
   // Verifica conexão com a API periodicamente
   React.useEffect(() => {

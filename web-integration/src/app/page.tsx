@@ -120,7 +120,7 @@ export default function DashboardPage() {
   };
 
   return (
-    <div className="flex-1 space-y-4 p-4 md:p-8 pt-6">
+    <div className="flex-1 space-y-4 p-4 md:p-8 pt-6" suppressHydrationWarning>
       {/* Header */}
       <div className="flex items-center justify-between space-y-2">
         <div>
@@ -131,7 +131,7 @@ export default function DashboardPage() {
         </div>
         <div className="flex items-center space-x-2">
           {/* Status de conexão */}
-          <div className="flex items-center space-x-2">
+          <div className="flex items-center space-x-2" suppressHydrationWarning>
             {isConnected ? (
               <div className="flex items-center space-x-1 text-green-600">
                 <Wifi className="h-4 w-4" />

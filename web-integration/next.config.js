@@ -49,6 +49,10 @@ const nextConfig = {
   generateEtags: true,
   // Configurações de build
   swcMinify: true,
+  // Configurações para resolver problemas RSC
+  experimental: {
+    serverComponentsExternalPackages: [],
+  },
 };
 
 module.exports = nextConfig;
