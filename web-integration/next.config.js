@@ -52,6 +52,20 @@ const nextConfig = {
   // Configurações para resolver problemas RSC
   experimental: {
     serverComponentsExternalPackages: [],
+    forceSwcTransforms: true,
+  },
+  // Desabilitar fast refresh para resolver problemas RSC
+  reactStrictMode: false,
+  // Configurações de webpack para resolver problemas RSC
+  webpack: (config, { buildId, dev, isServer, defaultLoaders, webpack }) => {
+    // Desabilitar fast refresh em desenvolvimento
+    if (dev && !isServer) {
+      config.watchOptions = {
+        poll: 1000,
+        aggregateTimeout: 300,
+      };
+    }
+    return config;
   },
 };
 
